@@ -17,4 +17,4 @@ The system manages the external lighting logic of a vehicle, prioritizing safety
 - **Concepts:** Embedded Logic, State Machines, Automotive Standards.
 
 ---
-*Developed by Angelo-Eduard Stanciu during the Continental Summer Camp 202X.*
+*Developed by Angelo-Eduard Stanciu during the Continental Summer Camp 2024.*
