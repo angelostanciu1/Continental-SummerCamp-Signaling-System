@@ -1,0 +1,229 @@
+#include <LiquidCrystal.h>
+
+#define LeftButton A1
+#define HazardButton A2
+#define RightButton A3
+#define LeftBlink A5
+#define RightBlink A4
+#define PotentiometerPin A0
+
+LiquidCrystal lcd(13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3);
+
+enum Mode {
+  Off,
+  Hazard,
+  LaneChangeRight,
+  LaneChangeLeft,
+  NormalRight,
+  NormalLeft
+};
+
+Mode CurrentMode = Off;
+unsigned long lastSwitchTime = 0;
+unsigned long lastBlinkTime = 0;
+
+unsigned long firstPressedLeftButtonTime = 0;
+unsigned long firstPressedRightButtonTime = 0;
+unsigned long firstPressedHazardButtonTime = 0;
+
+bool isPressedLeftButton = false;
+bool isPressedRightButton = false;
+
+int laneChangeBlinkCount = 0;
+
+void setup() {
+  pinMode(LeftButton, INPUT);
+  pinMode(RightButton, INPUT);
+  pinMode(HazardButton, INPUT);
+  pinMode(LeftBlink, OUTPUT);
+  pinMode(RightBlink, OUTPUT);
+
+  Serial.begin(9600);
+}
+
+float blinkFrequency = 1.0;
+
+void handleLaneChangeAndTurnMode() {
+  static bool leftButtonHeld = false;
+  static bool rightButtonHeld = false;
+  static bool isBlinking = false;
+  static unsigned long blinkStartTime = 0;
+
+  unsigned long now = millis();
+
+  // Dacă modul de avarii este activ, nu schimbăm semnalizarea
+  if (CurrentMode == Hazard) {
+    return; // Prioritizează modul de avarii și nu mai face nimic în funcția de semnalizare
+  }
+
+  if (digitalRead(LeftButton) == HIGH) {
+    if (!leftButtonHeld) {
+      firstPressedLeftButtonTime = now;
+      leftButtonHeld = true;
+    }
+
+    if (now - firstPressedLeftButtonTime > 500) {
+      CurrentMode = NormalLeft;
+    }
+  } else if (leftButtonHeld) {
+    if (now - firstPressedLeftButtonTime <= 500) {
+      CurrentMode = LaneChangeLeft;
+      laneChangeBlinkCount = 0;
+      isBlinking = true;
+      blinkStartTime = now;
+    }
+    leftButtonHeld = false;
+    lastSwitchTime = now;
+  }
+
+  if (digitalRead(RightButton) == HIGH) {
+    if (!rightButtonHeld) {
+      firstPressedRightButtonTime = now;
+      rightButtonHeld = true;
+    }
+
+    if (now - firstPressedRightButtonTime > 500) {
+      CurrentMode = NormalRight;
+    }
+  } else if (rightButtonHeld) {
+    if (now - firstPressedRightButtonTime <= 500) {
+      CurrentMode = LaneChangeRight;
+      laneChangeBlinkCount = 0;
+      isBlinking = true;
+      blinkStartTime = now;
+    }
+    rightButtonHeld = false;
+    lastSwitchTime = now;
+  }
+
+  if (CurrentMode == LaneChangeLeft || CurrentMode == LaneChangeRight) {
+    if (laneChangeBlinkCount < 3) {
+      unsigned long blinkDuration = now - blinkStartTime;
+
+      if (blinkDuration <= 300) {
+        if (CurrentMode == LaneChangeLeft) {
+          digitalWrite(LeftBlink, HIGH);
+        } else {
+          digitalWrite(RightBlink, HIGH);
+        }
+      } else if (blinkDuration > 300 && blinkDuration <= 1000) {
+        digitalWrite(LeftBlink, LOW);
+        digitalWrite(RightBlink, LOW);
+      } else if (blinkDuration > 1000) {
+        blinkStartTime = now;
+        laneChangeBlinkCount++;
+      }
+    } else {
+      CurrentMode = Off;
+      digitalWrite(LeftBlink, LOW);
+      digitalWrite(RightBlink, LOW);
+    }
+  }
+
+  if (CurrentMode == NormalLeft || CurrentMode == NormalRight) {
+    int potValue = analogRead(PotentiometerPin);
+    blinkFrequency = map(potValue, 0, 1023, 1, 10);
+    unsigned long cycleTime = 1000 / blinkFrequency;
+    unsigned long onTime = cycleTime / 2;
+
+    if (now - lastBlinkTime >= cycleTime) {
+      lastBlinkTime = now;
+    }
+
+    if ((now - lastBlinkTime) < onTime) {
+      if (CurrentMode == NormalLeft) {
+        digitalWrite(LeftBlink, HIGH);
+        digitalWrite(RightBlink, LOW);
+      } else if (CurrentMode == NormalRight) {
+        digitalWrite(RightBlink, HIGH);
+        digitalWrite(LeftBlink, LOW);
+      }
+    } else {
+      digitalWrite(LeftBlink, LOW);
+      digitalWrite(RightBlink, LOW);
+    }
+
+    if ((CurrentMode == NormalLeft && digitalRead(LeftButton) == LOW && now - firstPressedLeftButtonTime > 100) ||
+        (CurrentMode == NormalRight && digitalRead(RightButton) == LOW && now - firstPressedRightButtonTime > 100)) {
+      CurrentMode = Off;
+      digitalWrite(LeftBlink, LOW);
+      digitalWrite(RightBlink, LOW);
+    }
+  }
+}
+
+void handleHazardMode() {
+  static bool hazardState = false;
+
+  if (digitalRead(HazardButton) == HIGH) {
+    unsigned long now = millis();
+    if (now - firstPressedHazardButtonTime > 200 && !hazardState) {
+      hazardState = true;
+      CurrentMode = Hazard;
+      digitalWrite(LeftBlink, LOW);
+      digitalWrite(RightBlink, LOW);
+    } else if (hazardState && now - firstPressedHazardButtonTime > 200) {
+      hazardState = false;
+      CurrentMode = Off;
+      digitalWrite(LeftBlink, LOW);
+      digitalWrite(RightBlink, LOW);
+    }
+    firstPressedHazardButtonTime = now;
+  }
+
+  if (CurrentMode == Hazard) {
+    unsigned long now = millis();
+    if (now - lastBlinkTime >= 500) {
+      lastBlinkTime = now;
+      bool leftState = digitalRead(LeftBlink);
+      bool rightState = digitalRead(RightBlink);
+
+      digitalWrite(LeftBlink, !leftState);
+      digitalWrite(RightBlink, !rightState);
+    }
+  }
+}
+
+void displayCurrentMode() {
+  static Mode lastMode = Off;
+
+  if (CurrentMode != lastMode) {
+    lastMode = CurrentMode;
+    lcd.clear();
+
+    lcd.setCursor(0, 0);
+    switch (CurrentMode) {
+      case Off:
+        lcd.print(" ");
+        break;
+      case Hazard:
+        blinkFrequency = 1;
+        lcd.print("Avarii");
+        break;
+      case LaneChangeRight:
+        blinkFrequency = 1;
+        lcd.print("Right");
+        break;
+      case LaneChangeLeft:
+        blinkFrequency = 1;
+        lcd.print("Left");
+        break;
+      case NormalRight:
+        lcd.print("Blink Right");
+        break;
+      case NormalLeft:
+        lcd.print("Blink Left");
+        break;
+      default:
+        lcd.print(" ");
+        break;
+    }
+  }
+}
+
+void loop() {
+  handleHazardMode();
+  handleLaneChangeAndTurnMode();
+  displayCurrentMode();
+  delay(10);
+}
